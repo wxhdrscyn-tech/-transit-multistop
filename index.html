@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>多段公交路线 V3</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#f4f6f8;color:#111}
+.app{max-width:760px;margin:auto;padding:14px}.card{background:#fff;border-radius:18px;padding:16px;margin-bottom:12px;box-shadow:0 2px 14px #0001}
+h1{font-size:23px;margin:0 0 5px}.sub,.hint{color:#667085;font-size:13px;line-height:1.45}.stop{position:relative;margin:12px 0}
+.stophead{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;font-weight:650}
+input,button{font:inherit}.search{width:100%;padding:14px;border:1px solid #cfd5dc;border-radius:12px;font-size:16px;background:#fff}
+.search:focus{outline:2px solid #1112;border-color:#777}.suggest{display:none;position:absolute;z-index:1001;left:0;right:0;top:72px;background:white;border:1px solid #ddd;border-radius:12px;overflow:hidden;box-shadow:0 8px 25px #0002;max-height:260px;overflow-y:auto}
+.item{padding:12px;border-bottom:1px solid #eee;font-size:14px}.item:last-child{border:0}.item:active{background:#f0f0f0}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:12px;padding:12px 14px;font-weight:650;background:#111;color:#fff}.secondary{background:#eef1f4;color:#111}
+.remove{border:0;background:none;color:#b42318;font-size:13px}.status{font-size:14px;line-height:1.5}
+#map{height:46vh;min-height:330px;border-radius:18px;overflow:hidden}.selected{font-size:12px;color:#087443;margin-top:4px}
+</style>
+</head>
+<body><div class="app">
+<div class="card"><h1>多段公交路线 V3</h1><div class="sub">先搜索并选择 A → B → C。地点搜索已可独立使用；下一步再接 TTC 公交路由。</div>
+<div id="stops"></div>
+<div class="actions"><button class="btn secondary" id="add">＋ 添加途经点</button><button class="btn" id="show">在地图显示</button></div>
+</div>
+<div class="card status" id="status">输入地点名称，例如 <b>York University</b>、<b>Spadina Station</b>、<b>Union Station Toronto</b>。停顿约半秒会出现候选地点。</div>
+<div id="map"></div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map=L.map('map').setView([43.70,-79.42],11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'}).addTo(map);
+const stops=document.getElementById('stops'), status=document.getElementById('status');
+let markers=[], seq=0;
+function labels(){let n=stops.children.length;return [...stops.children].map((_,i)=>i===0?'起点 A':i===n-1?'终点 '+String.fromCharCode(65+i):'途经 '+String.fromCharCode(65+i))}
+function refreshLabels(){labels().forEach((x,i)=>stops.children[i].querySelector('.lab').textContent=x)}
+function row(){
+ const id=seq++, d=document.createElement('div');d.className='stop';d.dataset.id=id;
+ d.innerHTML=`<div class="stophead"><span class="lab"></span><button class="remove">删除</button></div><input class="search" autocomplete="off" placeholder="搜索地点或地址"><div class="selected"></div><div class="suggest"></div>`;
+ const inp=d.querySelector('.search'), sug=d.querySelector('.suggest'), sel=d.querySelector('.selected'); let timer;
+ inp.addEventListener('input',()=>{d.dataset.lat='';d.dataset.lon='';sel.textContent='';clearTimeout(timer);let q=inp.value.trim();if(q.length<2){sug.style.display='none';return}timer=setTimeout(()=>search(q,sug,d,inp,sel),550)});
+ inp.addEventListener('focus',()=>{if(sug.children.length)sug.style.display='block'});
+ d.querySelector('.remove').onclick=()=>{if(stops.children.length<=3){status.textContent='至少保留起点、一个途经点和终点。';return}d.remove();refreshLabels()};
+ return d
+}
+async function search(q,sug,d,inp,sel){
+ sug.innerHTML='<div class="item">正在搜索…</div>';sug.style.display='block';
+ try{
+   const u='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=ca&viewbox=-79.75,43.95,-79.05,43.45&bounded=0&q='+encodeURIComponent(q);
+   const r=await fetch(u,{headers:{'Accept-Language':'en-CA,zh-CN;q=0.9'}}); if(!r.ok)throw Error();
+   const data=await r.json();sug.innerHTML='';
+   if(!data.length){sug.innerHTML='<div class="item">没有找到地点，请换个关键词。</div>';return}
+   data.forEach(x=>{let it=document.createElement('div');it.className='item';it.textContent=x.display_name;it.onclick=()=>{inp.value=x.display_name;d.dataset.lat=x.lat;d.dataset.lon=x.lon;sel.textContent='✓ 已选择地点';sug.style.display='none';};sug.appendChild(it)})
+ }catch(e){sug.innerHTML='<div class="item">搜索服务暂时无法连接，请稍后重试。</div>'}
+}
+function reset(){stops.innerHTML='';stops.append(row(),row(),row());refreshLabels()}
+document.getElementById('add').onclick=()=>{let last=stops.lastElementChild;stops.insertBefore(row(),last);refreshLabels()}
+document.getElementById('show').onclick=()=>{
+ markers.forEach(m=>map.removeLayer(m));markers=[];let pts=[];
+ [...stops.children].forEach((d,i)=>{if(d.dataset.lat&&d.dataset.lon){let p=[+d.dataset.lat,+d.dataset.lon];pts.push(p);markers.push(L.marker(p).addTo(map).bindPopup(labels()[i]))}});
+ if(pts.length<2){status.innerHTML='请至少从搜索候选中<strong>选择两个地点</strong>。仅输入文字还不算选中。';return}
+ let line=L.polyline(pts,{weight:5,dashArray:'8 8'}).addTo(map);markers.push(line);map.fitBounds(L.latLngBounds(pts).pad(.18));
+ status.innerHTML=`已选择 ${pts.length} 个地点。虚线目前只表示途经顺序，不代表 TTC 实际线路。`;
+}
+document.addEventListener('click',e=>{if(!e.target.closest('.stop'))document.querySelectorAll('.suggest').forEach(x=>x.style.display='none')})
+reset();
+</script></body></html>
